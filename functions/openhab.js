@@ -15,13 +15,11 @@
  * openHAB handler for incoming intents from Google Assistant platform
  *
  * @author Mehmet Arziman - Initial contribution
- * @author Dan Cunningham - Foundations
  * @author Michael Krug - Rework
  *
  */
-const CommandTypes = require('./commands.js').Commands;
-const DeviceTypes = require('./devices.js').Devices;
-const Thermostat = require('./devices.js').Thermostat;
+const getCommandType = require('./commands.js').getCommandType;
+const getDeviceForItem = require('./devices.js').getDeviceForItem;
 
 class OpenHAB {
 	/**
@@ -33,41 +31,14 @@ class OpenHAB {
 
 	handleSync() {
 		console.log('openhabGoogleAssistant - handleSync');
-		const matchesGroup = (group1, group2) => (group1.some((e) => group2.includes(e)));
 		return this._apiHandler.getItems().then((items) => {
 			let discoveredDevicesList = [];
-			const thermostatGroups = items.filter((item) => Thermostat.appliesTo(item)).map((item) => item.name);
 			items.forEach((item) => {
-				const discoveredDevice = {
-					id: item.name,
-					type: '',
-					traits: [],
-					name: {
-						name: item.label
-					},
-					willReportState: false,
-					attributes: {},
-					deviceInfo: {
-						manufacturer: 'openHAB',
-						model: '',
-						hwVersion: '2.4.0',
-						swVersion: '2.4.0'
-					},
-					customData: {
-						itemType: item.type,
-						itemTag: '',
-						openhabVersion: '2.4.0'
-					}
-				};
-				const deviceType = DeviceTypes.find((itemType) => itemType.appliesTo(item) && !matchesGroup(thermostatGroups, item.groupNames));
-				if (deviceType) {
-					console.log(`openhabGoogleAssistant - handleSync - SYNC is adding: ${item.name} with tags: ${item.tags.join(', ')}`);
-					discoveredDevice.type = deviceType.type;
-					discoveredDevice.traits = deviceType.traits;
-					discoveredDevice.attributes = deviceType.getAttributes(item);
-					discoveredDevice.deviceInfo.model = deviceType.tag;
-					discoveredDevice.customData.itemTag = deviceType.tag;
-					discoveredDevicesList.push(discoveredDevice);
+				item.members = items.filter((member) => member.groupNames && member.groupNames.includes(item.name));
+				const DeviceType = getDeviceForItem(item);
+				if (DeviceType) {
+					console.log(`openhabGoogleAssistant - handleSync - SYNC is adding: ${item.type}:${item.name} with type: ${DeviceType.type}`);
+					discoveredDevicesList.push(DeviceType.getMetadata(item));
 				}
 			});
 			return { devices: discoveredDevicesList };
@@ -84,30 +55,22 @@ class OpenHAB {
 		};
 		const promises = devices.map((device) => {
 			return this._apiHandler.getItem(device.id).then((item) => {
-				const devicesPayload = {
-					id: device.id,
-					data: {
-						online: true
-					}
-				};
-				DeviceTypes.forEach((device) => {
-					if (device.appliesTo(item)) {
-						devicesPayload.data = Object.assign(devicesPayload.data, device.getState(item));
-					}
-				});
-				return devicesPayload;
+				const DeviceType = getDeviceForItem(item);
+				if (!DeviceType) {
+					throw { statusCode: 404 };
+				}
+				if (item.state === 'NULL' && !('getMembers' in DeviceType)) {
+					throw { statusCode: 406 };
+				}
+				payload.devices[device.id] = Object.assign({ online: true }, DeviceType.getState(item));
 			}).catch((error) => {
-				return {
-					ids: [device.id],
+				payload.devices[device.id] = {
 					status: 'ERROR',
-					errorCode: error.statusCode == 404 ? 'deviceNotFound' : error.statusCode == 400 ? 'notSupported' : 'deviceOffline'
+					errorCode: error.statusCode == 404 ? 'deviceNotFound' : error.statusCode == 400 ? 'notSupported' : error.statusCode == 406 ? 'deviceNotReady' : 'deviceOffline'
 				};
 			});
 		});
-		return Promise.all(promises).then((data) => {
-			data.forEach((device) => (payload.devices[device.id] = device.data));
-			return payload;
-		});
+		return Promise.all(promises).then(() => payload);
 	}
 
 
@@ -122,17 +85,27 @@ class OpenHAB {
 		const promises = [];
 		commands.forEach((command) => {
 			command.execution.forEach((execution) => {
-				const executionParams = execution.params;
-				const commandType = CommandTypes.find((commandType) => commandType.appliesTo(execution.command, executionParams));
-				if (commandType) {
-					promises.push((new commandType(this._apiHandler).execute(command.devices, executionParams)));
-				} else {
-					promises.push(Promise.resolve(command.devices.map((device) => ({
-						ids: [device.id],
+				// Special handling of ThermostatTemperatureSetRange that requires updating two values
+				if (execution.command === 'action.devices.commands.ThermostatTemperatureSetRange') {
+					const SetHigh = getCommandType('action.devices.commands.ThermostatTemperatureSetpointHigh', execution.params);
+					const SetLow = getCommandType('action.devices.commands.ThermostatTemperatureSetpointLow', execution.params);
+					if (SetHigh && SetLow) {
+						promises.push(SetHigh.execute(this._apiHandler, command.devices, execution.params, execution.challenge).then(() => {
+							return SetLow.execute(this._apiHandler, command.devices, execution.params, execution.challenge);
+						}));
+						return;
+					}
+				}
+				const CommandType = getCommandType(execution.command, execution.params);
+				if (!CommandType) {
+					promises.push(Promise.resolve({
+						ids: command.devices.map((device) => device.id),
 						status: 'ERROR',
 						errorCode: 'functionNotSupported'
-					}))));
+					}));
+					return;
 				}
+				promises.push(CommandType.execute(this._apiHandler, command.devices, execution.params, execution.challenge));
 			});
 		});
 		return Promise.all(promises).then((result) => {

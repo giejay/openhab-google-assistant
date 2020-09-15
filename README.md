@@ -12,7 +12,6 @@ The Google related parts of any Smart Home action rely on Google Home Graph, a d
 ## Requirements
 
 * Google account with "Actions on Google" and "Google Cloud Functions" access
-* oAuth2 Server/Provider (like Google Cloud or Amazon Login)
 * openHAB server that a Google Cloud service endpoint can access
 
 ## Google Cloud Functions
@@ -36,14 +35,29 @@ Deploy the `openhabGoogleAssistant` (openHAB home automation) function:
 
 Keep the address somewhere, you'll need it (something like `https://us-central1-<PROJECT ID>.cloudfunctions.net/openhabGoogleAssistant`).
 
-## Create OAuth Credentials on Google Cloud
+## Create OAuth Credentials
 
 You'll need to create OAuth credentials to enable API access.
 
-* Visit the [Credentials Page](https://console.cloud.google.com/apis/credentials)
-  1. Select "Create Credentials" -> "OAuth client id"
-  1. Select Web Application and give it a name. I left the restrictions open.
-* Copy the client id and the client secret, you'll need these in the next step.
+Since this is only used between your Google Cloud function and your openHAB cloud server, you can choose them on your own.
+See [The Client ID and Secret - OAuth](https://www.oauth.com/oauth2-servers/client-registration/client-id-secret/) for details.
+
+* You will need a client ID and a client secret:
+  1. Create a client ID (non-guessable public identifier)
+  1. Create a client secret (sufficiently random private secret, e.g. minimum 32 char random string)
+* You'll need these in the next steps.
+
+## Setup your Database
+
+* SSH into to your openHAB Cloud instance
+* Open the MongoDB client `mongo` and enter these commands
+
+```
+use openhab
+db.oauth2clients.insert({ clientId: "<CLIENT-ID>", clientSecret: "<CLIENT SECRET>"})
+db.oauth2scopes.insert({ name: "any"})
+db.oauth2scopes.insert( { name : "google-assistant", description: "Access to openHAB Cloud specific API for Actions on Google Assistant", } )
+```
 
 ## Actions on Google
 
@@ -59,7 +73,7 @@ Here you need to develop your actions to engage users on Google Home, Pixel, and
     * Enter the client ID and client secret from the OAuth Credentials you created earlier
     * Authorization URL should be something like: `https://openhab.myserver.com/oauth2/authorize`
     * Token URL should be something like `https://openhab.myserver.com/oauth2/token`
-    * Set the scope to `google-assistant`. This links to the records you will insert into the MongoDB table `oauth2scopes` later in [Setup your Database](#setup-your-database) step below.
+    * Set the scope to `google-assistant`. This links to the records that you have inserted into the MongoDB table `oauth2scopes` in [Setup your Database](#setup-your-database).
     * Testing instructions: "None"
   1. Hit save. You're not actually going to submit this for testing, we just need to set it up so we can deploy it later.
 
@@ -115,18 +129,6 @@ gactions test --action_package action.json --project <PROJECT ID>
 
 Note: Anytime you make changes to the settings to your Action on the _Actions By Google_ interface, you'll need to repeat this step.
 
-## Setup your Database
-
-* SSH into to your openHAB Cloud instance
-* Open the mongodb client `mongo` and enter these commands
-
-```
-use openhab
-db.oauth2clients.insert({ clientId: "<CLIENT-ID>", clientSecret: "<CLIENT SECRET>"})
-db.oauth2scopes.insert({ name: "any"})
-db.oauth2scopes.insert( { name : "google-assistant", description: "Access to openHAB Cloud specific API for Actions on Google Assistant", } )
-```
-
 ## Testing & Usage on Google App
 
 * Make sure Google Play Services is up to date
@@ -142,7 +144,7 @@ db.oauth2scopes.insert( { name : "google-assistant", description: "Access to ope
 If you're lucky this works! You'll need to configure your items (below) and then sync again.
 If it didn't work, try the workaround below.
 
-To resync changes in tagging or other OpenHAB configuration, tell Google Home to `sync my devices`. In a few seconds any changes will appear.
+To resync changes in the metadata or other openHAB configuration, tell Google Home to `sync my devices`. In a few seconds any changes will appear.
 
 ## Workarounds
 
@@ -174,53 +176,150 @@ To fix:
 
 Return back to the Google Home app and try to add the OpenHAB service again. You should now be able to see `[test] open hab` and add it successfully.
 
-
 ## Item configuration
 
-* In openHAB Items are exposed via HomeKit tags, the following is taken from the [HomeKit Add-on](https://www.openhab.org/addons/integrations/homekit/) documentation in openHAB:
+In openHAB items are exposed using metadata in the namespace `ga`:
 
-  ```
-  Switch KitchenLights "Kitchen Lights" <light> (gKitchen) [ "Switchable" ]
-  Dimmer BedroomLights "Bedroom Lights" <light> (gBedroom) [ "Lighting" ]
-  Color LivingroomLights "Livingroom Lights" <light> (gLivingroom) [ "Lighting" ]
-  Switch SceneMovie "Livingroom Scene Movie" (gLivingroom) [ "Scene" ]
-  Switch CristmasTree "Cristmas Tree" (gLivingroom) [ "Outlet" ]
-  Switch DoorLock "Door Lock" [ "Lock" ]
+```
+Switch KitchenLights "Kitchen Lights" <light> (gKitchen) { ga="Switch" }
+Dimmer BedroomLights "Bedroom Lights" <light> (gBedroom) { ga="Light" }
+Color LivingroomLights "Livingroom Lights" <light> (gLivingroom) { ga="Light" }
+Switch SceneMovie "Livingroom Scene Movie" (gLivingroom) { synonyms="Movie Scene", ga="Scene" }
+Switch CristmasTree "Cristmas Tree" (gLivingroom) { ga="Outlet" }
+Switch DoorLock "Door Lock" { ga="Lock" }
 
-  //Thermostat Setup (Google requires a mode, even if you manually set it up in openHAB)
-  Group g_HK_Basement_TSTAT "Basement Thermostat" [ "Thermostat", "Fahrenheit" ]
-  Number HK_Basement_Mode "Basement Heating/Cooling Mode" (g_HK_Basement_TSTAT) [ "homekit:TargetHeatingCoolingMode" ]
-  Number HK_Basement_Temp    "Basement Temperature" (g_HK_Basement_TSTAT) [ "CurrentTemperature" ]
-  Number HK_Basement_Setpoint "Basement Setpoint" (g_HK_Basement_TSTAT) [ "homekit:TargetTemperature" ]
-  ```
+//Thermostat Setup (Google requires a mode, even if you manually set it up in openHAB)
+Group g_HK_Basement_TSTAT "Basement Thermostat" { ga="Thermostat" [ useFahrenheit=true ] }
+Number HK_Basement_Mode "Basement Heating/Cooling Mode" (g_HK_Basement_TSTAT) { ga="thermostatMode" }
+Number HK_Basement_Setpoint "Basement Setpoint" (g_HK_Basement_TSTAT) { ga="thermostatTemperatureSetpoint" }
+Number HK_Basement_Temp "Basement Temperature" (g_HK_Basement_TSTAT) { ga="thermostatTemperatureAmbient" }
+Number HK_Basement_Humid "Basement Humidity" (g_HK_Basement_TSTAT) { ga="thermostatHumidityAmbient" }
+```
 
-Currently the following Tags are supported (also depending on Googles API capabilities):
+Currently the following metadata values are supported (also depending on Googles API capabilities):
 
-* ["Lighting"]
-* ["Switchable"]
-* ["Blinds"]
-* ["Scene"]
-* ["Outlet"]
-* ["Lock"]
-* ["Thermostat"]
-* ["CurrentTemperature"] as part of Thermostat.
-* ["CurrentHumidity"] as part of Thermostat.
-* ["homekit:TargetTemperature"] as part of Thermostat.
-* ["homekit:TargetHeatingCoolingMode"] as part of Thermostat.
+* `Switch / Dimmer / Color { ga="Light" }`
+* `Switch { ga="Switch" [ inverted=true ] }` (all Switch items can use the inverted option)
+* `Switch { ga="Outlet" }`
+* `Switch { ga="Coffee_Maker" }`
+* `Switch { ga="WaterHeater" }`
+* `Switch { ga="Fireplace" }`
+* `Switch { ga="Valve" }`
+* `Switch { ga="Sprinkler" }`
+* `Switch { ga="Vacuum" }`
+* `Switch { ga="Scene" }`
+* `Switch { ga="Lock" [ tfaAck=true ] }`
+* `Switch { ga="SecuritySystem" [ tfaPin="1234" ] }`
+* `Dimmer { ga="Speaker" }`
+* `Switch / Dimmer { ga="Fan" [ speeds="0=away:zero,50=default:standard:one,100=high:two", lang="en", ordered=true ] }` (for Dimmer the options have to be set)
+* `Switch / Dimmer { ga="Hood" }`
+* `Switch / Dimmer { ga="AirPurifier" }`
+* `Rollershutter { ga="Awning" [ inverted=true ] }` (all Rollershutter items can use the inverted option)
+* `Rollershutter { ga="Blinds" }`
+* `Rollershutter { ga="Curtain" }`
+* `Rollershutter { ga="Door" }`
+* `Rollershutter { ga="Garage" }`
+* `Rollershutter { ga="Gate" }`
+* `Rollershutter { ga="Pergola" }`
+* `Rollershutter { ga="Shutter" }`
+* `Rollershutter { ga="Window" }`
+* `Group { ga="Thermostat" [ modes="..." ] }`
+* `Number { ga="thermostatTemperatureAmbient" }` as part of Thermostat group
+* `Number { ga="thermostatHumidityAmbient" }` as part of Thermostat group
+* `Number { ga="thermostatTemperatureSetpoint" }` as part of Thermostat group
+* `Number / String { ga="thermostatMode" }` as part of Thermostat group
+* `String { ga="Camera" [ protocols="hls,dash" ] }`
 
-Notes Regarding Thermostat Items:
+_\* All Rollershutter devices can also be used with a Switch item with the limitation of only supporting open and close states._
 
-- Thermostat requires a group to be properly setup with Google Assistant, default format is Celsius
-- There must be 3 elements:
-  * Mode: May be Number (Zwave THERMOSTAT_MODE Format) or String (off, heat, cool, on)
-  * Current Temperature: Number
-  * TargetTemperature: Number
-- If your thermostat does not have a mode, you should create one and manually assign a value (e.g. heat, cool, on, etc.) to have proper functionality
-- See also [HomeKit Add-on](https://www.openhab.org/addons/integrations/homekit/) for further formatting details.
+Item labels are not mandatory in openHAB, but for the Google Assistant Action they are absolutely necessary!
 
-The following screenshots show the setup and the service linkage (https://myopenhab.org) procedure within the Google App:
+It is the "label text" (e.g. "Kitchen Lights" for example above) and not the item's name that will be available to you via voice commands or in the Google Home app, so make it unique and easy to say!
 
-![openHAB Google App](/docs/openhab_google_app.png)
+If you do not want to adjust your labels to be human spellable, you can use the "name" config option in the metadata: `[ name="Kitchen Lights" ]`. This will overwrite the label as the device's name.
+
+Furthermore, you can state synonyms for the device name: `Switch KitchenLight "Kitchen Lights" { synonyms="Top Light", ga="Light" }`.
+
+To ease setting up new devices you can add a room hint: `[ roomHint="Living Room" ]`.
+
+
+NOTE: metadata is not (yet?) available via paperUI. Either you create your items via ".items" files, or you can:
+- add metadata via console:
+ ```
+ smarthome:metadata add BedroomLights ga Light
+ ```
+
+- add metadata using the REST API:
+ ```
+ PUT /rest/items/BedroomLights/metadata/ga
+
+ {
+   "value": "Light"
+ }
+ ```
+
+### Special item configurations
+
+#### Two-Factor-Authentication
+
+For some actions, Google recommends to use TFA (Two-Factor-Authentication) to prevent accidential or unauthorized triggers of sensitive actions. See [Two-factor authentication &nbsp;|&nbsp; Actions on Google Smart Home](https://developers.google.com/assistant/smarthome/develop/two-factor-authentication).
+
+The openHAB Google Assistant integration supports both _ackNeeded_ and _pinNeeded_. You can use both types on all devices types and traits.
+
+_ackNeeded_: "A two-factor authentication that requires explicit acknowledgement (yes or no) and can also use trait states as response feedback. This challenge type is not recommended for security devices and traits."
+
+_pinNeeded_: "A two-factor authentication that requires a personal identification number (PIN), which is ideal for security devices and traits."
+
+Example:
+
+```
+Switch DoorLock "Front Door" { ga="Lock" [ tfaAck=true ] }
+Switch HouseAlarm "House Alarm" { ga="SecuritySystem" [ tfaPin="1234" ] }
+```
+
+#### Thermostats
+
+Thermostat requires a group of items to be properly configured to be used with Google Assistant. The default temperature unit is Celsius. `{ ga="Thermostat" }`
+
+To change the temperature unit to Fahrenheit, add the config option `[ useFahrenheit=true ]` to the thermostat group.
+To set the temperature range your thermostat supports, add the config option `[ thermostatTemperatureRange="10,30" ]` to the thermostat group.
+
+There must be at least three items as members of the group:
+
+* (Mandatory) Mode: Number (Zwave THERMOSTAT_MODE Format) or String (off, heat, cool, on, ...). `{ ga="thermostatMode" }`
+* (Mandatory) Temperature Ambient: Number. `{ ga="thermostatTemperatureAmbient" }`
+* (Mandatory) Temperature Setpoint: Number. `{ ga="thermostatTemperatureSetpoint" }`
+* (Optional) Temperature Setpoint High: Number. `{ ga="thermostatTemperatureSetpointHigh" }`
+* (Optional) Temperature Setpoint Low: Number. `{ ga="thermostatTemperatureSetpointLow" }`
+* (Optional) Humidity Ambient: Number. `{ ga="thermostatHumidityAmbient" }`
+
+If your thermostat does not have a mode, you should create one and manually assign a value (e.g. heat, cool, on, etc.) to have proper functionality.
+
+To map the [default thermostat modes of Google](https://developers.google.com/assistant/smarthome/traits/temperaturesetting.html) (on, off, heat, cool, etc.) to custom ones for your specific setup, you can use the _modes_ config option on the thermostat group.
+E.g. `[ modes="off=OFF:WINDOW_OPEN,heat=COMFORT:BOOST,eco=ECO,on=ON,auto" ]` will enable the following five modes in Google Home `"off, heat, eco, on, auto"` that will be translated to `"OFF, COMFORT, ECO, ON, auto"`. You can specify alternative conversions using the colon sign, so that in the former example "BOOST" in openHAB would also be translated to "heat" in Google. For the translation of Google modes to openHAB always the first option after the equal sign is used.
+By default the integration will provide `"off,heat,cool,on,heatcool,auto,eco"`.
+
+You can also set up a Thermostat for using it as a temperature sensor. To do so, create a Thermostat group and only add one item member as "thermostatTemperatureAmbient".
+
+#### Fans
+
+_Fans_ (and similar device types, like _AirPurifier_ or _Hood_) support the _FanSpeed_ trait.
+With that you will be able to set up and use human speakable modes, e.g. "fast" for 100% or "slow" for 25%.
+
+To set up those modes use a _Dimmer_ item and the following metadata config: `[ speeds="0=away:zero,50=default:standard:one,100=high:two", lang="en", ordered=true ]`.
+
+_speeds_ will be a comma-separated list of modes with a percentage number followed by an equal sign and different aliases for that mode after a colon.
+So here both "high" and "two" would set the speed to 100%.
+You are also able to define the language of those aliases.
+The option _ordered_ will tell the system that your list is ordered and you will then be able to also say "faster" or "slower" and Google will use the next or previous speed.
+
+#### Blinds and similar devices
+
+Blinds should always use the `Rollershutter` item type.
+Since Google and openHAB use the oposite percentage value for "opened" or "closed", the action will tranlate this automatically.
+If the values are still inverted in your case, you can state the `[ inverted=true ]` option for all `Rollershutter` items.
+
+More details about the setup and the service linkage (https://myopenhab.org) procedure within the Google App can be found in the [USAGE documentation](docs/USAGE.md).
 
 ## Example Voice Commands
 
@@ -255,4 +354,4 @@ gcloud beta functions logs read openhabGoogleAssistant
 * https://developers.google.com/actions/extending-the-assistant
 * https://developers.google.com/actions/smarthome/
 * https://cloud.google.com/functions/docs/how-to
-* {{base}}addons/integrations/homekit/
+* https://www.openhab.org/addons/integrations/homekit/
