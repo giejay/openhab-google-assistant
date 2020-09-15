@@ -36,6 +36,7 @@ class OpenHAB {
 		const matchesGroup = (group1, group2) => (group1.some((e) => group2.includes(e)));
 		return this._apiHandler.getItems().then((items) => {
 			let discoveredDevicesList = [];
+			console.log('items', items);
 			const thermostatGroups = items.filter((item) => Thermostat.appliesTo(item)).map((item) => item.name);
 			items.forEach((item) => {
 				const discoveredDevice = {
@@ -70,7 +71,8 @@ class OpenHAB {
 					discoveredDevicesList.push(discoveredDevice);
 				}
 			});
-			return { devices: discoveredDevicesList };
+      console.log('discoveredDevicesList', discoveredDevicesList);
+      return { devices: discoveredDevicesList };
 		});
 	}
 
